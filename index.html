@@ -1,0 +1,763 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>雨在哪裡</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+TC:wght@400;500;700&family=Noto+Serif+TC:wght@700&display=swap">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+/* Layout: full-bleed map with a left instrument panel on desktop, a bottom sheet on phones.
+   Rain classes r0..r4 run light blue to crimson and are shared by map markers, legend and lists. */
+:root {
+  --ground: #e9eef1;
+  --panel: #f7f9fa;
+  --ink: #12202a;
+  --ink-2: #4b5c68;
+  --line: #d2dade;
+  --accent: #0a6b8f;
+  --accent-ink: #ffffff;
+  --ok: #1c7a4b;
+  --bad: #b3261e;
+  --dry: #93a3ae;
+  --r0: #6db3dc;
+  --r1: #2f86cf;
+  --r2: #2352b5;
+  --r3: #7a2fb5;
+  --r4: #cf1f55;
+  --font-serif: "Noto Serif TC", "Songti TC", "PMingLiU", serif;
+  --font-sans: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #0a1116; --panel: #111b22; --ink: #e4ecf1; --ink-2: #9db0bd; --line: #25353f;
+    --accent: #5ccaf2; --accent-ink: #06222c; --ok: #5fd39a; --bad: #ff8a80; --dry: #5d707c;
+    --r0: #7cc4ee; --r1: #4fa3e8; --r2: #6a90f2; --r3: #ad74f2; --r4: #ff5c8a;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #0a1116; --panel: #111b22; --ink: #e4ecf1; --ink-2: #9db0bd; --line: #25353f;
+  --accent: #5ccaf2; --accent-ink: #06222c; --ok: #5fd39a; --bad: #ff8a80; --dry: #5d707c;
+  --r0: #7cc4ee; --r1: #4fa3e8; --r2: #6a90f2; --r3: #ad74f2; --r4: #ff5c8a;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--ground);
+  color: var(--ink);
+  font: 14px/1.55 var(--font-sans);
+  -webkit-text-size-adjust: 100%;
+}
+button, input { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+.app {
+  height: 100vh; height: 100dvh;
+  display: grid;
+  grid-template-columns: 372px minmax(0, 1fr);
+  grid-template-areas: "panel map";
+}
+#map { grid-area: map; min-width: 0; min-height: 0; background: var(--ground); }
+.panel {
+  grid-area: panel;
+  min-width: 0; min-height: 0;
+  display: flex; flex-direction: column;
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+}
+.head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 16px 16px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.head h1 { margin: 0; font: 700 26px/1.1 var(--font-serif); letter-spacing: .04em; }
+.head .sub { margin: 2px 0 0; color: var(--ink-2); font-size: 12px; letter-spacing: .08em; }
+.head-actions { display: flex; gap: 8px; }
+.btn {
+  border: 1px solid var(--line); background: transparent; border-radius: 6px;
+  padding: 6px 12px; min-height: 34px;
+}
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.btn:disabled { opacity: .55; cursor: default; }
+.btn.spin::before { content: ""; display: inline-block; width: 10px; height: 10px; margin-right: 6px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -1px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .btn.spin::before { animation-duration: 2.4s; } }
+.sheet-toggle { display: none; }
+
+.scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 0 16px 20px; }
+.summary { margin: 14px 0 4px; display: grid; gap: 6px; }
+.summary p { margin: 0; }
+.summary .big { font-size: 15px; }
+.summary b { font-family: var(--font-mono); font-weight: 500; font-size: 1.15em; }
+.stamp { margin: 8px 0 0; color: var(--ink-2); font-size: 12px; }
+
+.block { padding-top: 16px; display: grid; gap: 10px; }
+.block h2 { margin: 0; font: 700 12px/1 var(--font-sans); letter-spacing: .14em; color: var(--ink-2); }
+.layer { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; align-items: center; cursor: pointer; }
+.layer input { grid-row: span 2; width: 16px; height: 16px; accent-color: var(--accent); margin: 0; }
+.layer .t { font-weight: 500; }
+.layer .d { color: var(--ink-2); font-size: 12px; }
+
+.seg { display: inline-grid; grid-auto-flow: column; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; width: max-content; max-width: 100%; }
+.seg label { position: relative; }
+.seg input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.seg span { display: block; padding: 6px 12px; font-size: 13px; border-left: 1px solid var(--line); }
+.seg label:first-child span { border-left: 0; }
+.seg input:checked + span { background: var(--accent); color: var(--accent-ink); }
+.seg input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.player { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center; }
+.player input[type=range] { width: 100%; accent-color: var(--accent); }
+.player .time { font-family: var(--font-mono); font-size: 12px; color: var(--ink-2); white-space: nowrap; }
+.player.off { opacity: .45; pointer-events: none; }
+
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: var(--ink-2); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+
+.tabs { display: flex; gap: 0; border-bottom: 1px solid var(--line); margin-top: 18px; }
+.tabs button { flex: 1; border: 0; background: transparent; padding: 10px 4px; border-bottom: 2px solid transparent; color: var(--ink-2); font-weight: 500; }
+.tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+.pane { padding-top: 12px; display: grid; gap: 10px; }
+.list { list-style: none; margin: 0; padding: 0; display: grid; }
+.list li + li { border-top: 1px solid var(--line); }
+.row {
+  width: 100%; border: 0; background: transparent; text-align: left;
+  display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; gap: 10px; align-items: center;
+  padding: 9px 2px;
+}
+.row:hover .name { color: var(--accent); }
+.row .chip { width: 10px; height: 10px; border-radius: 50%; background: var(--dry); }
+.row .name { font-weight: 500; overflow-wrap: anywhere; }
+.row .meta { color: var(--ink-2); font-size: 12px; overflow-wrap: anywhere; }
+.row .val { font-family: var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; }
+.row .val small { color: var(--ink-2); font-size: 11px; }
+.empty { color: var(--ink-2); margin: 0; }
+
+.keybox { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; }
+.keybox p { margin: 0; color: var(--ink-2); font-size: 13px; }
+.keybox .field { display: flex; gap: 8px; flex-wrap: wrap; }
+.keybox input[type=password], .keybox input[type=text] {
+  flex: 1 1 180px; min-width: 0; padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--ground);
+  font-family: var(--font-mono); font-size: 13px;
+}
+a { color: var(--accent); }
+.linkbtn { border: 0; background: none; padding: 0; color: var(--accent); text-decoration: underline; text-underline-offset: 3px; justify-self: start; }
+
+.sources { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 13px; }
+.sources li { display: grid; grid-template-columns: 10px minmax(0, 1fr); gap: 8px; align-items: baseline; }
+.sources .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dry); }
+.sources .ok .dot { background: var(--ok); }
+.sources .error .dot { background: var(--bad); }
+.sources .loading .dot { background: var(--accent); }
+.sources .msg { color: var(--ink-2); font-size: 12px; display: block; overflow-wrap: anywhere; }
+.fine { color: var(--ink-2); font-size: 12px; margin: 18px 0 0; }
+
+.leaflet-container { font-family: var(--font-sans); background: var(--ground); }
+.leaflet-popup-content-wrapper, .leaflet-popup-tip { background: var(--panel); color: var(--ink); }
+.leaflet-popup-content { margin: 12px 14px; min-width: 210px; }
+.leaflet-control-attribution { font-size: 10px; }
+.pop-title { font: 700 15px/1.3 var(--font-sans); }
+.pop-sub { color: var(--ink-2); font-size: 12px; margin-bottom: 6px; }
+.pop dl { margin: 8px 0; display: grid; grid-template-columns: auto 1fr; gap: 3px 14px; }
+.pop dt { color: var(--ink-2); }
+.pop dd { margin: 0; text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.pop h4 { margin: 10px 0 0; font-size: 11px; letter-spacing: .12em; color: var(--ink-2); }
+.pop a { font-weight: 500; }
+.spot-icon span { display: block; width: 12px; height: 12px; background: var(--c); border: 2px solid var(--panel); box-shadow: 0 0 0 1px var(--ink-2); transform: rotate(45deg); }
+.spot-icon.dry span { background: var(--panel); }
+
+@media (max-width: 760px) {
+  .app { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; grid-template-areas: "map" "panel"; }
+  .panel { max-height: 52dvh; border-right: 0; border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom, 0px); }
+  .head { padding: 10px 16px; }
+  .head h1 { font-size: 22px; }
+  .sheet-toggle { display: inline-block; }
+  .panel.collapsed .scroll { display: none; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <div id="map" role="application" aria-label="台灣降雨地圖"></div>
+
+  <aside class="panel" id="panel">
+    <header class="head">
+      <div>
+        <h1>雨在哪裡</h1>
+        <p class="sub">台灣即時降雨</p>
+      </div>
+      <div class="head-actions">
+        <button id="refresh" class="btn" type="button">更新</button>
+        <button id="sheetToggle" class="btn sheet-toggle" type="button" aria-expanded="true">收合</button>
+      </div>
+    </header>
+
+    <div class="scroll">
+      <div class="summary" id="summary" aria-live="polite"><p>讀取資料中…</p></div>
+      <p class="stamp" id="stamp"></p>
+
+      <section class="block" aria-labelledby="h-layers">
+        <h2 id="h-layers">圖層</h2>
+        <label class="layer"><input type="checkbox" id="lyRadar" checked><span class="t">雷達回波</span><span class="d">RainViewer，約每 10 分鐘更新，可回看 2 小時</span></label>
+        <label class="layer"><input type="checkbox" id="lyStations" checked><span class="t">雨量站實測</span><span class="d">氣象署自動雨量站，需設定 Apps Script 轉接網址</span></label>
+        <label class="layer"><input type="checkbox" id="lySpots" checked><span class="t">代表地點預報</span><span class="d">Open-Meteo 模式資料，<span id="spotCount">32</span> 處，菱形標記</span></label>
+      </section>
+
+      <section class="block" aria-labelledby="h-radar">
+        <h2 id="h-radar">雷達回放</h2>
+        <div class="player" id="player">
+          <button id="play" class="btn" type="button" aria-label="播放雷達動畫">播放</button>
+          <input id="frame" type="range" min="0" max="0" value="0" aria-label="雷達時間">
+          <span class="time" id="frameTime">--:--</span>
+        </div>
+      </section>
+
+      <section class="block" aria-labelledby="h-win">
+        <h2 id="h-win">雨量站累積時間</h2>
+        <div class="seg" role="radiogroup" aria-label="累積時間">
+          <label><input type="radio" name="win" value="m10"><span>10 分鐘</span></label>
+          <label><input type="radio" name="win" value="h1" checked><span>1 小時</span></label>
+          <label><input type="radio" name="win" value="h24"><span>24 小時</span></label>
+        </div>
+        <div class="legend" id="legend"></div>
+      </section>
+
+      <div class="tabs" role="tablist" aria-label="清單">
+        <button type="button" role="tab" id="tabStations" aria-selected="true" aria-controls="paneStations">雨量站排行</button>
+        <button type="button" role="tab" id="tabSpots" aria-selected="false" aria-controls="paneSpots">代表地點</button>
+      </div>
+
+      <div class="pane" id="paneStations" role="tabpanel" aria-labelledby="tabStations">
+        <div class="keybox" id="keyBox" hidden>
+          <p id="keyHelp">氣象署的資料不能由網頁直接讀取，要透過你自己的 Google Apps Script 轉接（做法見隨附的 cwa-proxy.gs）。部署完成後，把「網頁應用程式」網址貼在這裡，就能看到全台上千個實測雨量站。氣象署授權碼只放在 Apps Script，不會進到這個網頁。</p>
+          <form class="field" id="keyForm" autocomplete="off">
+            <input type="url" id="keyInput" placeholder="https://script.google.com/macros/s/…/exec" aria-label="Apps Script 轉接網址" autocomplete="off" spellcheck="false">
+            <button class="btn primary" type="submit">儲存並載入</button>
+          </form>
+        </div>
+        <ul class="list" id="stationList"></ul>
+        <button class="linkbtn" id="keyChange" type="button" hidden>更換或清除轉接網址</button>
+      </div>
+
+      <div class="pane" id="paneSpots" role="tabpanel" aria-labelledby="tabSpots" hidden>
+        <ul class="list" id="spotList"></ul>
+      </div>
+
+      <section class="block" aria-labelledby="h-src">
+        <h2 id="h-src">資料狀態</h2>
+        <ul class="sources" id="sources"></ul>
+      </section>
+
+      <p class="fine">點地圖任一處，可看該點的模式預報、最近雨量站，並連到 tw.live 的附近即時影像。雨量站資料來自中央氣象署開放資料（政府資料開放授權條款第 1 版），預報來自 Open-Meteo（CC BY 4.0），雷達來自 RainViewer，底圖 © Esri、OpenStreetMap contributors。自動站資料未經完整檢驗，大雨、豪雨特報與避難資訊請以中央氣象署公告為準。</p>
+    </div>
+  </aside>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+(() => {
+'use strict';
+
+/* ---------- helpers ---------- */
+const $ = (id) => document.getElementById(id);
+/* localStorage can be blocked when the file is opened from a phone's file manager, so keep an in-memory copy too */
+const mem = {};
+const store = {
+  get(k) { try { const v = localStorage.getItem(k); if (v !== null) return v; } catch (e) {} return k in mem ? mem[k] : null; },
+  set(k, v) { mem[k] = v; try { localStorage.setItem(k, v); } catch (e) {} },
+  del(k) { delete mem[k]; try { localStorage.removeItem(k); } catch (e) {} }
+};
+const KEY_NAME = 'cwa-proxy-url';
+store.del('cwa-api-key'); // older versions kept the CWA key in this browser; it now stays in Apps Script only
+const TZ = 'Asia/Taipei';
+const fmtClock = new Intl.DateTimeFormat('zh-TW', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+const fmtDay = new Intl.DateTimeFormat('zh-TW', { timeZone: TZ, month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+
+function el(tag, props, ...kids) {
+  const e = document.createElement(tag);
+  if (props) for (const [k, v] of Object.entries(props)) {
+    if (k === 'class') e.className = v;
+    else if (k === 'text') e.textContent = v;
+    else e.setAttribute(k, v);
+  }
+  kids.flat().forEach((c) => { if (c != null) e.append(c.nodeType ? c : document.createTextNode(String(c))); });
+  return e;
+}
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const mm = (v, d = 1) => (v == null ? '—' : v.toFixed(d) + ' mm');
+const camUrl = (lat, lon) => `https://tw.live/nearby/?lat=${lat.toFixed(5)}&lon=${lon.toFixed(5)}`;
+
+async function fetchJSON(url) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 20000);
+  try {
+    const r = await fetch(url, { signal: ctl.signal });
+    if (!r.ok) { const e = new Error('HTTP ' + r.status); e.status = r.status; throw e; }
+    return await r.json();
+  } finally { clearTimeout(timer); }
+}
+function describeError(e) {
+  if (e && e.name === 'AbortError') return '連線逾時';
+  if (e && (e.status === 401 || e.status === 403)) return '授權碼無效或已停用';
+  if (e && e.status) return '伺服器回應 ' + e.status;
+  return '連線失敗，可能是網路中斷或瀏覽器擋下跨網域請求';
+}
+function haversine(lat1, lon1, lat2, lon2) {
+  const R = 6371, rad = Math.PI / 180;
+  const dLat = (lat2 - lat1) * rad, dLon = (lon2 - lon1) * rad;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+/* ---------- constants ---------- */
+const WINDOWS = {
+  m10: { label: '10 分鐘', bins: [1, 3, 7, 14] },
+  h1:  { label: '1 小時', bins: [5, 15, 40, 80] },      // 1 hr: 40 mm = heavy rain (CWA)
+  h24: { label: '24 小時', bins: [10, 40, 80, 200] }    // 24 hr: 80 mm heavy, 200 mm extremely heavy (CWA)
+};
+const SPOTS = [
+  ['台北', 25.04, 121.56], ['新北板橋', 25.01, 121.46], ['基隆', 25.13, 121.74], ['淡水', 25.17, 121.44],
+  ['陽明山', 25.16, 121.55], ['九份', 25.11, 121.84], ['桃園', 24.99, 121.30], ['新竹', 24.81, 120.97],
+  ['苗栗', 24.56, 120.82], ['台中', 24.15, 120.67], ['彰化', 24.08, 120.54], ['埔里', 23.96, 120.97],
+  ['日月潭', 23.86, 120.91], ['合歡山', 24.14, 121.28], ['雲林斗六', 23.71, 120.54], ['嘉義', 23.48, 120.45],
+  ['阿里山', 23.51, 120.80], ['玉山', 23.47, 120.96], ['台南', 22.99, 120.21], ['高雄', 22.63, 120.30],
+  ['屏東', 22.67, 120.49], ['恆春', 22.00, 120.74], ['台東', 22.76, 121.14], ['花蓮', 23.98, 121.60],
+  ['太魯閣', 24.16, 121.62], ['宜蘭', 24.76, 121.75], ['蘇澳', 24.60, 121.86], ['澎湖馬公', 23.57, 119.57],
+  ['金門', 24.43, 118.32], ['馬祖南竿', 26.16, 119.95], ['綠島', 22.66, 121.49], ['蘭嶼', 22.05, 121.55]
+].map(([name, lat, lon]) => ({ name, lat, lon, data: null }));
+$('spotCount').textContent = SPOTS.length;
+
+const WX = { 0: '晴', 1: '大致晴朗', 2: '多雲', 3: '陰', 45: '霧', 48: '霧凇', 51: '細雨', 53: '毛毛雨', 55: '密集毛毛雨',
+  56: '凍毛毛雨', 57: '凍毛毛雨', 61: '小雨', 63: '中雨', 65: '大雨', 66: '凍雨', 67: '強凍雨', 71: '小雪', 73: '中雪',
+  75: '大雪', 77: '雪粒', 80: '陣雨', 81: '較強陣雨', 82: '強陣雨', 85: '陣雪', 86: '強陣雪', 95: '雷雨', 96: '雷雨夾小冰雹', 99: '雷雨夾大冰雹' };
+const wx = (c) => (c in WX ? WX[c] : '—');
+
+const state = {
+  win: 'h1', tab: 'stations', editingKey: false,
+  stations: null, radar: null, updated: null,
+  sources: {
+    radar:    { label: '雷達回波（RainViewer）', st: 'idle', msg: '' },
+    stations: { label: '雨量站實測（氣象署）', st: 'idle', msg: '' },
+    spots:    { label: '代表地點預報（Open-Meteo）', st: 'idle', msg: '' }
+  }
+};
+function setSource(name, st, msg) { state.sources[name] = { ...state.sources[name], st, msg: msg || '', at: Date.now() }; renderStatus(); }
+
+/* rain class: -1 dry, 0..4 intensity */
+function classOf(v, bins) {
+  if (v == null || v <= 0) return -1;
+  if (v < bins[0]) return 0;
+  if (v < bins[1]) return 1;
+  if (v < bins[2]) return 2;
+  if (v < bins[3]) return 3;
+  return 4;
+}
+const classColor = (k) => (k < 0 ? css('--dry') : css('--r' + k));
+
+/* ---------- map ---------- */
+const map = L.map('map', {
+  preferCanvas: true, zoomControl: false, minZoom: 6, maxZoom: 12,
+  center: [23.75, 120.95], zoom: window.innerWidth < 760 ? 7 : 8,
+  maxBounds: [[16, 112], [29.5, 130]]
+});
+L.control.zoom({ position: 'bottomright' }).addTo(map);
+map.createPane('radar').style.zIndex = 350;
+map.getPane('radar').style.pointerEvents = 'none';
+map.createPane('labels').style.zIndex = 360;
+map.getPane('labels').style.pointerEvents = 'none';
+
+/* Basemap: Esri gray canvas (no API key needed). CARTO's free tiles now require a key and draw a watermark. */
+const esri = (name, opts) => L.tileLayer(`https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/${name}/MapServer/tile/{z}/{y}/{x}`,
+  Object.assign({ maxNativeZoom: 16, maxZoom: 12, attribution: 'Tiles © Esri — Esri, HERE, Garmin, © OpenStreetMap contributors' }, opts));
+const themes = {
+  light: { base: esri('World_Light_Gray_Base'), labels: esri('World_Light_Gray_Reference', { pane: 'labels' }) },
+  dark:  { base: esri('World_Dark_Gray_Base'),  labels: esri('World_Dark_Gray_Reference', { pane: 'labels' }) }
+};
+
+const mq = window.matchMedia('(prefers-color-scheme: dark)');
+let currentTheme = null;
+function applyTheme() {
+  const attr = document.documentElement.getAttribute('data-theme');
+  const next = attr === 'dark' || attr === 'light' ? attr : (mq.matches ? 'dark' : 'light');
+  if (next === currentTheme) return;
+  if (currentTheme) { map.removeLayer(themes[currentTheme].base); map.removeLayer(themes[currentTheme].labels); }
+  themes[next].base.addTo(map).bringToBack();
+  themes[next].labels.addTo(map);
+  currentTheme = next;
+  renderStations(); renderSpots(); renderLegend(); renderLists();
+}
+mq.addEventListener('change', applyTheme);
+
+const stationGroup = L.layerGroup().addTo(map);
+const spotGroup = L.layerGroup().addTo(map);
+let radarLayer = null;
+let popup = null;
+function showPopup(latlng, node) {
+  popup = L.popup({ maxWidth: 300, autoPanPadding: [24, 24] }).setLatLng(latlng).setContent(node).openOn(map);
+}
+
+/* ---------- radar (RainViewer) ---------- */
+const frameInput = $('frame'), frameTime = $('frameTime'), playBtn = $('play');
+let playTimer = null;
+function frameUrl(f) { return `${state.radar.host}${f.path}/256/{z}/{x}/{y}/2/1_1.png`; }
+function showFrame(i) {
+  const f = state.radar && state.radar.frames[i];
+  if (!f) return;
+  const url = frameUrl(f);
+  if (!radarLayer) {
+    radarLayer = L.tileLayer(url, { pane: 'radar', opacity: 0.75, maxNativeZoom: 7, maxZoom: 12, tileSize: 256, attribution: '雷達 © RainViewer' });
+    if ($('lyRadar').checked) radarLayer.addTo(map);
+  } else { radarLayer.setUrl(url); }
+  frameInput.value = i;
+  frameTime.textContent = fmtDay.format(new Date(f.time * 1000));
+}
+async function loadRadar() {
+  setSource('radar', 'loading');
+  try {
+    const j = await fetchJSON('https://api.rainviewer.com/public/weather-maps.json');
+    const frames = (j.radar && j.radar.past) || [];
+    if (!j.host || !frames.length) throw new Error('empty');
+    state.radar = { host: j.host, frames };
+    frameInput.max = frames.length - 1;
+    showFrame(frames.length - 1);
+    setSource('radar', 'ok', `${frames.length} 張畫面，最新 ${fmtClock.format(new Date(frames[frames.length - 1].time * 1000))}`);
+  } catch (e) {
+    setSource('radar', 'error', e.message === 'empty' ? '沒有可用的雷達畫面' : describeError(e));
+  }
+}
+function stopPlay() { clearInterval(playTimer); playTimer = null; playBtn.textContent = '播放'; playBtn.setAttribute('aria-label', '播放雷達動畫'); }
+playBtn.addEventListener('click', () => {
+  if (!state.radar) return;
+  if (playTimer) { stopPlay(); return; }
+  playBtn.textContent = '暫停'; playBtn.setAttribute('aria-label', '暫停雷達動畫');
+  let i = Number(frameInput.value);
+  if (i >= state.radar.frames.length - 1) i = -1;
+  playTimer = setInterval(() => {
+    i = (i + 1) % state.radar.frames.length;
+    showFrame(i);
+  }, 700);
+});
+frameInput.addEventListener('input', () => { stopPlay(); showFrame(Number(frameInput.value)); });
+
+/* ---------- stations (CWA O-A0002-001) ---------- */
+function parseStation(s) {
+  const geo = s.GeoInfo || {};
+  const coords = geo.Coordinates || [];
+  const c = coords.find((x) => /WGS/i.test(x.CoordinateName || '')) || coords[0] || {};
+  const lat = Number(c.StationLatitude), lon = Number(c.StationLongitude);
+  const re = s.RainfallElement || {};
+  const val = (k) => {
+    const raw = re[k] && re[k].Precipitation;
+    const n = Number(raw);
+    return raw == null || raw === '' || !Number.isFinite(n) || n < 0 ? null : n;
+  };
+  return {
+    id: s.StationId, name: s.StationName || '', county: geo.CountyName || '', town: geo.TownName || '',
+    lat, lon, time: s.ObsTime && s.ObsTime.DateTime,
+    v: { m10: val('Past10Min'), h1: val('Past1hr'), h24: val('Past24hr') }
+  };
+}
+/* The CWA API does not allow browser pages to call it directly (no CORS), so the data comes through the
+   user's own Google Apps Script web app (cwa-proxy.gs), which holds the CWA key and returns compact JSON. */
+async function loadStations() {
+  const proxy = store.get(KEY_NAME);
+  if (!proxy) { state.stations = null; setSource('stations', 'idle', '尚未設定轉接網址'); return; }
+  setSource('stations', 'loading');
+  try {
+    const j = await fetchJSON(proxy);
+    if (!j || j.ok !== true) throw Object.assign(new Error('proxy'), { proxyMsg: (j && j.error) || '轉接程式回傳格式不符' });
+    state.stations = (j.stations || []).filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lon));
+    if (!state.stations.length) throw Object.assign(new Error('proxy'), { proxyMsg: '轉接程式沒有回傳任何測站' });
+    const t = state.stations.map((s) => Date.parse(s.time)).filter(Number.isFinite);
+    const latest = t.length ? fmtClock.format(new Date(Math.max(...t))) : '';
+    setSource('stations', 'ok', `${state.stations.length} 站${latest ? '，觀測時間 ' + latest : ''}`);
+  } catch (e) {
+    state.stations = null;
+    setSource('stations', 'error', e.proxyMsg ? '轉接程式回報：' + e.proxyMsg : describeError(e));
+  }
+}
+
+/* ---------- spots (Open-Meteo) ---------- */
+async function loadSpots() {
+  setSource('spots', 'loading');
+  try {
+    const lats = SPOTS.map((s) => s.lat).join(','), lons = SPOTS.map((s) => s.lon).join(',');
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lats}&longitude=${lons}&current=temperature_2m,precipitation,weather_code&timezone=Asia%2FTaipei`;
+    let j = await fetchJSON(url);
+    if (!Array.isArray(j)) j = [j];
+    if (j.length !== SPOTS.length) throw new Error('shape');
+    j.forEach((r, i) => { SPOTS[i].data = r && r.current ? r.current : null; });
+    const t = SPOTS[0].data && SPOTS[0].data.time;
+    setSource('spots', 'ok', `${SPOTS.length} 處${t ? '，資料時間 ' + t.slice(11, 16) : ''}`);
+  } catch (e) {
+    setSource('spots', 'error', e.message === 'shape' ? '回傳格式和預期不同' : describeError(e));
+  }
+}
+
+/* ---------- popups ---------- */
+function kv(label, value) { return [el('dt', { text: label }), el('dd', { text: value })]; }
+function camLink(lat, lon) {
+  return el('a', { href: camUrl(lat, lon), target: '_blank', rel: 'noopener', text: '查看附近即時影像 →' });
+}
+function stationPopup(s) {
+  const t = Date.parse(s.time);
+  return el('div', { class: 'pop' },
+    el('div', { class: 'pop-title', text: s.name }),
+    el('div', { class: 'pop-sub', text: `${s.county}${s.town}${Number.isFinite(t) ? '　' + fmtDay.format(new Date(t)) : ''}` }),
+    el('dl', null, kv('10 分鐘', mm(s.v.m10)), kv('1 小時', mm(s.v.h1)), kv('24 小時', mm(s.v.h24))),
+    camLink(s.lat, s.lon));
+}
+function spotPopup(sp) {
+  const d = sp.data || {};
+  return el('div', { class: 'pop' },
+    el('div', { class: 'pop-title', text: sp.name }),
+    el('div', { class: 'pop-sub', text: '模式預報（Open-Meteo）' }),
+    el('dl', null, kv('天氣', d.weather_code == null ? '—' : wx(d.weather_code)), kv('近 1 小時降雨', mm(d.precipitation)),
+      kv('氣溫', d.temperature_2m == null ? '—' : d.temperature_2m.toFixed(1) + ' °C')),
+    camLink(sp.lat, sp.lon));
+}
+function nearestStation(lat, lon) {
+  if (!state.stations) return null;
+  let best = null, bd = Infinity;
+  for (const s of state.stations) {
+    const d = haversine(lat, lon, s.lat, s.lon);
+    if (d < bd) { bd = d; best = s; }
+  }
+  return best ? { s: best, d: bd } : null;
+}
+async function openPoint(latlng) {
+  const { lat, lng } = latlng;
+  const body = el('div', null, el('p', { class: 'empty', text: '讀取中…' }));
+  const box = el('div', { class: 'pop' },
+    el('div', { class: 'pop-title', text: `${lat.toFixed(3)}°N　${lng.toFixed(3)}°E` }),
+    el('div', { class: 'pop-sub', text: '選取位置' }), body);
+  showPopup(latlng, box);
+
+  const parts = [];
+  const near = nearestStation(lat, lng);
+  if (near) {
+    parts.push(el('h4', { text: '最近雨量站（實測）' }),
+      el('div', { class: 'pop-sub', text: `${near.s.county}${near.s.town}${near.s.name}，距離 ${near.d.toFixed(1)} 公里` }),
+      el('dl', null, kv('10 分鐘', mm(near.s.v.m10)), kv('1 小時', mm(near.s.v.h1)), kv('24 小時', mm(near.s.v.h24))));
+  }
+  try {
+    const u = `https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(4)}&longitude=${lng.toFixed(4)}&current=temperature_2m,relative_humidity_2m,precipitation,weather_code&minutely_15=precipitation&forecast_minutely_15=4&timezone=Asia%2FTaipei`;
+    const j = await fetchJSON(u);
+    const c = j.current || {};
+    const next = j.minutely_15 && Array.isArray(j.minutely_15.precipitation)
+      ? j.minutely_15.precipitation.reduce((a, b) => a + (Number(b) || 0), 0) : null;
+    parts.push(el('h4', { text: '模式預報（Open-Meteo）' }),
+      el('dl', null,
+        kv('天氣', c.weather_code == null ? '—' : wx(c.weather_code)),
+        kv('近 1 小時降雨', mm(c.precipitation)),
+        kv('未來 1 小時預測', mm(next)),
+        kv('氣溫', c.temperature_2m == null ? '—' : c.temperature_2m.toFixed(1) + ' °C'),
+        kv('濕度', c.relative_humidity_2m == null ? '—' : Math.round(c.relative_humidity_2m) + ' %')));
+  } catch (e) {
+    parts.push(el('p', { class: 'empty', text: '模式預報讀取失敗：' + describeError(e) }));
+  }
+  if (!near && !state.stations) parts.push(el('p', { class: 'empty', text: '設定轉接網址後，這裡會顯示最近的實測雨量站。' }));
+  parts.push(camLink(lat, lng));
+  body.replaceChildren(...parts);
+  popup && popup.update();
+}
+map.on('click', (e) => openPoint(e.latlng));
+
+/* ---------- rendering ---------- */
+function renderStations() {
+  stationGroup.clearLayers();
+  if (!state.stations) return;
+  const bins = WINDOWS[state.win].bins;
+  const stroke = css('--panel');
+  const rainy = [], dry = [];
+  state.stations.forEach((s) => (classOf(s.v[state.win], bins) >= 0 ? rainy : dry).push(s));
+  const add = (s, k) => {
+    const m = L.circleMarker([s.lat, s.lon], {
+      radius: k < 0 ? 2.5 : 5 + k * 1.6,
+      color: k < 0 ? css('--dry') : stroke, weight: k < 0 ? 0 : 1,
+      fillColor: classColor(k), fillOpacity: k < 0 ? 0.55 : 0.88,
+      bubblingMouseEvents: false
+    });
+    m.on('click', () => showPopup([s.lat, s.lon], stationPopup(s)));
+    m.addTo(stationGroup);
+  };
+  dry.forEach((s) => add(s, -1));
+  rainy.sort((a, b) => a.v[state.win] - b.v[state.win]).forEach((s) => add(s, classOf(s.v[state.win], bins)));
+}
+function renderSpots() {
+  spotGroup.clearLayers();
+  SPOTS.forEach((sp) => {
+    const p = sp.data ? sp.data.precipitation : null;
+    const k = classOf(p, WINDOWS.h1.bins);
+    const icon = L.divIcon({
+      className: 'spot-icon' + (k < 0 ? ' dry' : ''),
+      html: `<span style="--c:${classColor(k)}"></span>`, iconSize: [16, 16], iconAnchor: [8, 8]
+    });
+    const m = L.marker([sp.lat, sp.lon], { icon, keyboard: false, title: sp.name, bubblingMouseEvents: false });
+    m.on('click', () => showPopup([sp.lat, sp.lon], spotPopup(sp)));
+    m.addTo(spotGroup);
+  });
+}
+function renderLegend() {
+  const w = WINDOWS[state.win], b = w.bins;
+  const items = [
+    [-1, '無雨'], [0, `<${b[0]}`], [1, `${b[0]}–${b[1]}`], [2, `${b[1]}–${b[2]}`], [3, `${b[2]}–${b[3]}`], [4, `≥${b[3]}`]
+  ];
+  $('legend').replaceChildren(...items.map(([k, t]) => {
+    const i = el('i'); i.style.background = classColor(k);
+    return el('span', null, i, k < 0 ? t : t + ' mm');
+  }));
+}
+function renderSummary() {
+  const w = WINDOWS[state.win];
+  const lines = [];
+  if (state.stations) {
+    const rainy = state.stations.filter((s) => s.v[state.win] > 0);
+    if (!rainy.length) {
+      lines.push(el('p', { class: 'big' }, `近 ${w.label}，全台 `, el('b', { text: state.stations.length }), ' 個測站都沒有降雨。'));
+    } else {
+      const top = rainy.reduce((a, b) => (b.v[state.win] > a.v[state.win] ? b : a));
+      lines.push(el('p', { class: 'big' }, `近 ${w.label}有 `, el('b', { text: rainy.length }), ` / ${state.stations.length} 個測站有雨，最大 `,
+        el('b', { text: top.v[state.win].toFixed(1) }), ` mm（${top.county}${top.town}${top.name}）。`));
+    }
+  }
+  const loaded = SPOTS.filter((s) => s.data);
+  if (loaded.length) {
+    const wet = loaded.filter((s) => s.data.precipitation > 0);
+    lines.push(el('p', { class: state.stations ? '' : 'big' }, '代表地點近 1 小時（模式）：', el('b', { text: wet.length }), ` / ${loaded.length} 處有降雨` +
+      (wet.length ? '，' + wet.sort((a, b) => b.data.precipitation - a.data.precipitation).slice(0, 4).map((s) => s.name).join('、') + ' 等地。' : '。')));
+  }
+  if (!state.stations) lines.push(el('p', { class: 'empty', text: '設定轉接網址後可顯示氣象署實測雨量站。' }));
+  if (!lines.length) lines.push(el('p', { text: '資料讀取失敗，請看下方資料狀態。' }));
+  $('summary').replaceChildren(...lines);
+  $('stamp').textContent = state.updated ? `畫面更新於 ${fmtClock.format(new Date(state.updated))}，每 10 分鐘自動更新` : '';
+}
+function rowButton(chipColor, name, meta, valueNode, onClick) {
+  const chip = el('span', { class: 'chip' }); chip.style.background = chipColor;
+  const b = el('button', { class: 'row', type: 'button' }, chip, el('span', null, el('div', { class: 'name', text: name }), el('div', { class: 'meta', text: meta })), valueNode);
+  b.addEventListener('click', onClick);
+  return el('li', null, b);
+}
+function renderLists() {
+  /* stations tab */
+  const hasKey = !!store.get(KEY_NAME);
+  $('keyBox').hidden = hasKey && !state.editingKey;
+  $('keyChange').hidden = !hasKey || state.editingKey;
+  const list = $('stationList');
+  if (!state.stations) {
+    list.replaceChildren(hasKey ? el('li', null, el('p', { class: 'empty', text: state.sources.stations.st === 'error' ? '雨量站資料讀取失敗，原因見下方資料狀態。' : '讀取雨量站中…' })) : '');
+  } else {
+    const bins = WINDOWS[state.win].bins;
+    const top = state.stations.filter((s) => s.v[state.win] > 0).sort((a, b) => b.v[state.win] - a.v[state.win]).slice(0, 10);
+    if (!top.length) list.replaceChildren(el('li', null, el('p', { class: 'empty', text: `近 ${WINDOWS[state.win].label}沒有測站記錄到降雨。` })));
+    else list.replaceChildren(...top.map((s) => rowButton(
+      classColor(classOf(s.v[state.win], bins)), s.name, `${s.county}${s.town}`,
+      el('span', { class: 'val' }, s.v[state.win].toFixed(1), el('small', { text: ' mm' })),
+      () => { map.flyTo([s.lat, s.lon], Math.max(map.getZoom(), 10), { duration: 0.6 }); showPopup([s.lat, s.lon], stationPopup(s)); })));
+  }
+  /* spots tab */
+  const b1 = WINDOWS.h1.bins;
+  const sorted = SPOTS.filter((s) => s.data).sort((a, c) => (c.data.precipitation || 0) - (a.data.precipitation || 0));
+  $('spotList').replaceChildren(...(sorted.length ? sorted.map((sp) => rowButton(
+    classColor(classOf(sp.data.precipitation, b1)), sp.name,
+    `${wx(sp.data.weather_code)}　${sp.data.temperature_2m == null ? '' : sp.data.temperature_2m.toFixed(0) + ' °C'}`,
+    el('span', { class: 'val' }, (sp.data.precipitation || 0).toFixed(1), el('small', { text: ' mm' })),
+    () => { map.flyTo([sp.lat, sp.lon], Math.max(map.getZoom(), 9), { duration: 0.6 }); showPopup([sp.lat, sp.lon], spotPopup(sp)); })) :
+    [el('li', null, el('p', { class: 'empty', text: '尚無代表地點資料。' }))]));
+}
+function renderStatus() {
+  $('sources').replaceChildren(...Object.values(state.sources).map((s) => {
+    const label = { idle: '未啟用', loading: '讀取中', ok: '正常', error: '失敗' }[s.st];
+    return el('li', { class: s.st }, el('span', { class: 'dot' }), el('span', null, `${s.label}：${label}`, s.msg ? el('span', { class: 'msg', text: s.msg }) : null));
+  }));
+}
+function renderAll() { renderStations(); renderSpots(); renderSummary(); renderLegend(); renderLists(); renderStatus(); }
+
+/* ---------- refresh ---------- */
+const refreshBtn = $('refresh');
+let busy = false;
+async function refreshAll() {
+  if (busy) return;
+  busy = true; refreshBtn.disabled = true; refreshBtn.classList.add('spin');
+  await Promise.allSettled([loadRadar(), loadStations(), loadSpots()]);
+  state.updated = Date.now();
+  renderAll();
+  busy = false; refreshBtn.disabled = false; refreshBtn.classList.remove('spin');
+}
+refreshBtn.addEventListener('click', refreshAll);
+setInterval(refreshAll, 10 * 60 * 1000);
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && state.updated && Date.now() - state.updated > 10 * 60 * 1000) refreshAll();
+});
+
+/* ---------- controls ---------- */
+$('lyRadar').addEventListener('change', (e) => {
+  if (!radarLayer) return;
+  if (e.target.checked) radarLayer.addTo(map); else { map.removeLayer(radarLayer); stopPlay(); }
+  $('player').classList.toggle('off', !e.target.checked);
+});
+$('lyStations').addEventListener('change', (e) => { if (e.target.checked) stationGroup.addTo(map); else map.removeLayer(stationGroup); });
+$('lySpots').addEventListener('change', (e) => { if (e.target.checked) spotGroup.addTo(map); else map.removeLayer(spotGroup); });
+document.querySelectorAll('input[name="win"]').forEach((r) => r.addEventListener('change', () => {
+  state.win = r.value; renderStations(); renderSummary(); renderLegend(); renderLists();
+}));
+function selectTab(name) {
+  state.tab = name;
+  const st = name === 'stations';
+  $('tabStations').setAttribute('aria-selected', st);
+  $('tabSpots').setAttribute('aria-selected', !st);
+  $('paneStations').hidden = !st;
+  $('paneSpots').hidden = st;
+}
+$('tabStations').addEventListener('click', () => selectTab('stations'));
+$('tabSpots').addEventListener('click', () => selectTab('spots'));
+
+$('keyForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const v = $('keyInput').value.trim();
+  if (!/^https:\/\/script\.google(usercontent)?\.com\//.test(v)) {
+    state.sources.stations = { ...state.sources.stations, st: 'error', msg: '網址要以 https://script.google.com/ 開頭，請貼上「網頁應用程式」的網址' };
+    renderStatus();
+    return;
+  }
+  store.set(KEY_NAME, v);
+  $('keyInput').value = '';
+  state.editingKey = false;
+  await loadStations();
+  renderAll();
+});
+$('keyChange').addEventListener('click', () => { state.editingKey = true; renderLists(); });
+const clearBtn = el('button', { class: 'linkbtn', type: 'button', text: '清除已儲存的網址' });
+clearBtn.addEventListener('click', async () => {
+  store.del(KEY_NAME); state.editingKey = false; state.stations = null;
+  await loadStations(); renderAll();
+});
+$('keyBox').append(clearBtn);
+
+const sheet = $('panel'), sheetToggle = $('sheetToggle');
+sheetToggle.addEventListener('click', () => {
+  const collapsed = sheet.classList.toggle('collapsed');
+  sheetToggle.textContent = collapsed ? '展開' : '收合';
+  sheetToggle.setAttribute('aria-expanded', String(!collapsed));
+  setTimeout(() => map.invalidateSize(), 50);
+});
+
+/* ---------- boot ---------- */
+applyTheme();
+renderAll();
+refreshAll();
+})();
+</script>
+</body>
+</html>
