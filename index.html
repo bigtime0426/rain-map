@@ -176,6 +176,12 @@ a { color: var(--accent); }
 .pop a { font-weight: 500; }
 .spot-icon span { display: block; width: 12px; height: 12px; background: var(--c); border: 2px solid var(--panel); box-shadow: 0 0 0 1px var(--ink-2); transform: rotate(45deg); }
 .spot-icon.dry span { background: var(--panel); }
+.cam-icon span { display: block; width: 12px; height: 12px; border-radius: 3px; background: var(--c); border: 2px solid var(--panel); box-shadow: 0 0 0 1px var(--ink-2); }
+.cam-icon.stale span { opacity: .45; }
+.warnbar { margin: 10px 0 0; padding: 8px 10px; border-left: 3px solid var(--r4); background: color-mix(in srgb, var(--r4) 12%, var(--panel)); font-size: 13px; line-height: 1.5; }
+.warnbar[hidden] { display: none; }
+.warnbar b { font-weight: 600; }
+.pop img.frame { display: block; width: 100%; margin-top: 6px; border-radius: 4px; }
 
 @media (max-width: 760px) {
   .app { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; grid-template-areas: "map" "panel"; }
@@ -205,12 +211,15 @@ a { color: var(--accent); }
 
     <div class="scroll">
       <div class="summary" id="summary" aria-live="polite"><p>讀取資料中…</p></div>
+      <div class="warnbar" id="warnbar" role="status" hidden></div>
       <p class="stamp" id="stamp"></p>
 
       <section class="block" aria-labelledby="h-layers">
         <h2 id="h-layers">圖層</h2>
         <label class="layer"><input type="checkbox" id="lyRadar" checked><span class="t">雷達回波</span><span class="d">RainViewer，約每 10 分鐘更新，可回看 2 小時</span></label>
         <label class="layer"><input type="checkbox" id="lyStations" checked><span class="t">雨量站實測</span><span class="d">氣象署自動雨量站，需設定 Apps Script 轉接網址</span></label>
+        <label class="layer"><input type="checkbox" id="lyCams" checked><span class="t">鏡頭判斷</span><span class="d">路邊鏡頭畫面經 AI 判斷有無下雨，方塊標記；顏色：藍＝有雨、綠＝無雨、灰＝無法判斷，淡色＝超過 3 小時前的結果</span></label>
+        <label class="layer"><input type="checkbox" id="lyWarn" checked><span class="t">豪大雨特報</span><span class="d">氣象署各縣市豪雨、大雨等特報，顯示在頂端橫幅</span></label>
         <label class="layer"><input type="checkbox" id="lySpots" checked><span class="t">代表地點預報</span><span class="d">Open-Meteo 模式資料，<span id="spotCount">32</span> 處，菱形標記</span></label>
       </section>
 
@@ -349,7 +358,8 @@ const state = {
   sources: {
     radar:    { label: '雷達回波（RainViewer）', st: 'idle', msg: '' },
     stations: { label: '雨量站實測（氣象署）', st: 'idle', msg: '' },
-    spots:    { label: '代表地點預報（Open-Meteo）', st: 'idle', msg: '' }
+    spots:    { label: '代表地點預報（Open-Meteo）', st: 'idle', msg: '' },
+    cams:     { label: '鏡頭判斷（盯雨程式）', st: 'idle', msg: '' }
   }
 };
 function setSource(name, st, msg) { state.sources[name] = { ...state.sources[name], st, msg: msg || '', at: Date.now() }; renderStatus(); }
@@ -395,12 +405,13 @@ function applyTheme() {
   themes[next].base.addTo(map).bringToBack();
   themes[next].labels.addTo(map);
   currentTheme = next;
-  renderStations(); renderSpots(); renderLegend(); renderLists();
+  renderStations(); renderSpots(); renderCams(); renderLegend(); renderLists();
 }
 mq.addEventListener('change', applyTheme);
 
 const stationGroup = L.layerGroup().addTo(map);
 const spotGroup = L.layerGroup().addTo(map);
+const camGroup = L.layerGroup().addTo(map);
 let radarLayer = null;
 let popup = null;
 function showPopup(latlng, node) {
@@ -609,6 +620,72 @@ function renderSpots() {
     m.addTo(spotGroup);
   });
 }
+/* ---------- camera judgements + warnings (map.json written by the rain-monitor job) ---------- */
+const MONITOR_BASE = 'https://raw.githubusercontent.com/bigtime0426/rain-monitor/main/';
+const STALE_MS = 3 * 3600 * 1000;
+function camColor(c) {
+  if (!c.ok) return css('--dry');
+  if (c.raining === 'yes') return css('--r2');
+  if (c.raining === 'no') return css('--ok');
+  return css('--dry');
+}
+function camVerdict(c) {
+  if (!c.ok) return '無法取得畫面或判斷';
+  return { yes: '判斷：正在下雨', no: '判斷：沒有下雨', unclear: '判斷：無法確定' }[c.raining] || '判斷：無法確定';
+}
+function camPopup(c) {
+  const t = Date.parse(c.checked);
+  const kids = [
+    el('div', { class: 'pop-title', text: c.name }),
+    el('div', { class: 'pop-sub', text: `${c.area}${Number.isFinite(t) ? '　判斷於 ' + fmtDay.format(new Date(t)) : ''}` }),
+    el('dl', null,
+      kv('結果', camVerdict(c)),
+      c.ok ? kv('信心', c.confidence == null ? '—' : Math.round(c.confidence * 100) + '%') : null,
+      c.ok ? kv('路面濕', c.road_wet == null ? '—' : (c.road_wet ? '是' : '否')) : null,
+      kv('鄰近雨量站', c.station),
+      kv('站 10 分鐘', mm(c.m10)), kv('站 1 小時', mm(c.h1)))
+  ];
+  if (c.reason) kids.push(el('div', { class: 'pop-sub', text: c.reason }));
+  if (c.frame) kids.push(el('img', { class: 'frame', loading: 'lazy', alt: '鏡頭畫面', src: MONITOR_BASE + c.frame }));
+  return el('div', { class: 'pop' }, ...kids);
+}
+function renderCams() {
+  camGroup.clearLayers();
+  const d = state.cams;
+  if (!d) return;
+  const now = Date.now();
+  d.cameras.forEach((c) => {
+    const stale = !(now - Date.parse(c.checked) < STALE_MS);
+    const icon = L.divIcon({
+      className: 'cam-icon' + (stale ? ' stale' : ''),
+      html: `<span style="--c:${camColor(c)}"></span>`, iconSize: [16, 16], iconAnchor: [8, 8]
+    });
+    const m = L.marker([c.lat, c.lon], { icon, keyboard: false, title: c.name, bubblingMouseEvents: false, zIndexOffset: c.raining === 'yes' ? 500 : 0 });
+    m.on('click', () => showPopup([c.lat, c.lon], camPopup(c)));
+    m.addTo(camGroup);
+  });
+}
+function renderWarn() {
+  const box = $('warnbar');
+  const w = state.cams && state.cams.warnings || {};
+  const places = Object.keys(w);
+  if (!places.length || !$('lyWarn').checked) { box.hidden = true; box.replaceChildren(); return; }
+  box.hidden = false;
+  box.replaceChildren(el('b', { text: '氣象署特報　' }),
+    ...places.map((p, i) => el('span', null, (i ? '；' : ''), `${p}：${w[p].join('、')}`)));
+}
+async function loadCams() {
+  setSource('cams', 'loading');
+  try {
+    const j = await fetchJSON(MONITOR_BASE + 'map.json?t=' + Math.floor(Date.now() / 60000));
+    if (!j || !Array.isArray(j.cameras)) throw new Error('shape');
+    state.cams = j;
+    const yes = j.cameras.filter((c) => c.raining === 'yes').length;
+    setSource('cams', 'ok', `${j.cameras.length} 支，${yes} 支判斷有雨，更新於 ${fmtDay.format(new Date(j.updated))}`);
+  } catch (e) {
+    setSource('cams', 'error', e.status === 404 ? '讀不到 map.json（盯雨程式尚未產生，或倉庫未公開）' : (e.message === 'shape' ? '回傳格式和預期不同' : describeError(e)));
+  }
+}
 function renderLegend() {
   const w = WINDOWS[state.win], b = w.bins;
   const items = [
@@ -682,7 +759,7 @@ function renderStatus() {
     return el('li', { class: s.st }, el('span', { class: 'dot' }), el('span', null, `${s.label}：${label}`, s.msg ? el('span', { class: 'msg', text: s.msg }) : null));
   }));
 }
-function renderAll() { renderStations(); renderSpots(); renderSummary(); renderLegend(); renderLists(); renderStatus(); }
+function renderAll() { renderStations(); renderSpots(); renderCams(); renderWarn(); renderSummary(); renderLegend(); renderLists(); renderStatus(); }
 
 /* ---------- refresh ---------- */
 const refreshBtn = $('refresh');
@@ -690,7 +767,7 @@ let busy = false;
 async function refreshAll() {
   if (busy) return;
   busy = true; refreshBtn.disabled = true; refreshBtn.classList.add('spin');
-  await Promise.allSettled([loadRadar(), loadStations(), loadSpots()]);
+  await Promise.allSettled([loadRadar(), loadStations(), loadSpots(), loadCams()]);
   state.updated = Date.now();
   renderAll();
   busy = false; refreshBtn.disabled = false; refreshBtn.classList.remove('spin');
@@ -708,6 +785,8 @@ $('lyRadar').addEventListener('change', (e) => {
   $('player').classList.toggle('off', !e.target.checked);
 });
 $('lyStations').addEventListener('change', (e) => { if (e.target.checked) stationGroup.addTo(map); else map.removeLayer(stationGroup); });
+$('lyCams').addEventListener('change', (e) => { if (e.target.checked) camGroup.addTo(map); else map.removeLayer(camGroup); });
+$('lyWarn').addEventListener('change', renderWarn);
 $('lySpots').addEventListener('change', (e) => { if (e.target.checked) spotGroup.addTo(map); else map.removeLayer(spotGroup); });
 document.querySelectorAll('input[name="win"]').forEach((r) => r.addEventListener('change', () => {
   state.win = r.value; renderStations(); renderSummary(); renderLegend(); renderLists();
