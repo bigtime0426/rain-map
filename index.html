@@ -22,6 +22,7 @@
   --ok: #1c7a4b;
   --bad: #b3261e;
   --dry: #93a3ae;
+  --t1: #2e9e5b; --t2: #c9b21f; --t3: #e8871e; --t4: #d6402f; --t5: #8c1a3a;
   --r0: #6db3dc;
   --r1: #2f86cf;
   --r2: #2352b5;
@@ -35,14 +36,14 @@
   :root:not([data-theme="light"]) {
     --ground: #0a1116; --panel: #111b22; --ink: #e4ecf1; --ink-2: #9db0bd; --line: #25353f;
     --accent: #5ccaf2; --accent-ink: #06222c; --ok: #5fd39a; --bad: #ff8a80; --dry: #5d707c;
-    --r0: #7cc4ee; --r1: #4fa3e8; --r2: #6a90f2; --r3: #ad74f2; --r4: #ff5c8a;
+    --t1: #4cc27c; --t2: #e3cf45; --t3: #f2a03d; --t4: #ff6b57; --t5: #ff4f8b; --r0: #7cc4ee; --r1: #4fa3e8; --r2: #6a90f2; --r3: #ad74f2; --r4: #ff5c8a;
     color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
   --ground: #0a1116; --panel: #111b22; --ink: #e4ecf1; --ink-2: #9db0bd; --line: #25353f;
   --accent: #5ccaf2; --accent-ink: #06222c; --ok: #5fd39a; --bad: #ff8a80; --dry: #5d707c;
-  --r0: #7cc4ee; --r1: #4fa3e8; --r2: #6a90f2; --r3: #ad74f2; --r4: #ff5c8a;
+  --t1: #4cc27c; --t2: #e3cf45; --t3: #f2a03d; --t4: #ff6b57; --t5: #ff4f8b; --r0: #7cc4ee; --r1: #4fa3e8; --r2: #6a90f2; --r3: #ad74f2; --r4: #ff5c8a;
   color-scheme: dark;
 }
 
@@ -178,6 +179,8 @@ a { color: var(--accent); }
 .spot-icon.dry span { background: var(--panel); }
 .cam-icon span { display: block; width: 12px; height: 12px; border-radius: 3px; background: var(--c); border: 2px solid var(--panel); box-shadow: 0 0 0 1px var(--ink-2); }
 .cam-icon.stale span { opacity: .45; }
+.tlegend { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 12px; color: var(--ink-2); margin: 2px 0 0 26px; }
+.tlegend i { display: inline-block; width: 14px; height: 4px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
 .warnbar { margin: 10px 0 0; padding: 8px 10px; border-left: 3px solid var(--r4); background: color-mix(in srgb, var(--r4) 12%, var(--panel)); font-size: 13px; line-height: 1.5; }
 .warnbar[hidden] { display: none; }
 .warnbar b { font-weight: 600; }
@@ -219,6 +222,8 @@ a { color: var(--accent); }
         <label class="layer"><input type="checkbox" id="lyRadar" checked><span class="t">雷達回波</span><span class="d">RainViewer，約每 10 分鐘更新，可回看 2 小時</span></label>
         <label class="layer"><input type="checkbox" id="lyStations" checked><span class="t">雨量站實測</span><span class="d">氣象署自動雨量站，需設定 Apps Script 轉接網址</span></label>
         <label class="layer"><input type="checkbox" id="lyCams" checked><span class="t">鏡頭判斷</span><span class="d">路邊鏡頭畫面經 AI 判斷有無下雨，方塊標記；顏色：藍＝有雨、綠＝無雨、灰＝無法判斷，淡色＝超過 3 小時前的結果</span></label>
+        <label class="layer"><input type="checkbox" id="lyTraffic" checked><span class="t">國道與市區省道路況</span><span class="d">交通部 TDX 即時車速與壅塞等級：全國國道，以及台北市、高雄市範圍的省道</span></label>
+        <div class="tlegend" id="tlegend"><span><i style="background:var(--t1)"></i>順暢</span><span><i style="background:var(--t2)"></i>車多</span><span><i style="background:var(--t3)"></i>壅塞</span><span><i style="background:var(--t4)"></i>嚴重</span><span><i style="background:var(--t5)"></i>停滯</span></div>
         <label class="layer"><input type="checkbox" id="lyWarn" checked><span class="t">豪大雨特報</span><span class="d">氣象署各縣市豪雨、大雨等特報，顯示在頂端橫幅</span></label>
         <label class="layer"><input type="checkbox" id="lySpots" checked><span class="t">代表地點預報</span><span class="d">Open-Meteo 模式資料，<span id="spotCount">32</span> 處，菱形標記</span></label>
       </section>
@@ -359,7 +364,8 @@ const state = {
     radar:    { label: '雷達回波（RainViewer）', st: 'idle', msg: '' },
     stations: { label: '雨量站實測（氣象署）', st: 'idle', msg: '' },
     spots:    { label: '代表地點預報（Open-Meteo）', st: 'idle', msg: '' },
-    cams:     { label: '鏡頭判斷（盯雨程式）', st: 'idle', msg: '' }
+    cams:     { label: '鏡頭判斷（盯雨程式）', st: 'idle', msg: '' },
+    traffic:  { label: '路況（TDX，盯雨程式整理）', st: 'idle', msg: '' }
   }
 };
 function setSource(name, st, msg) { state.sources[name] = { ...state.sources[name], st, msg: msg || '', at: Date.now() }; renderStatus(); }
@@ -405,13 +411,16 @@ function applyTheme() {
   themes[next].base.addTo(map).bringToBack();
   themes[next].labels.addTo(map);
   currentTheme = next;
-  renderStations(); renderSpots(); renderCams(); renderLegend(); renderLists();
+  renderStations(); renderSpots(); renderCams(); renderTraffic(); renderLegend(); renderLists();
 }
 mq.addEventListener('change', applyTheme);
 
 const stationGroup = L.layerGroup().addTo(map);
 const spotGroup = L.layerGroup().addTo(map);
 const camGroup = L.layerGroup().addTo(map);
+map.createPane('traffic').style.zIndex = 380;
+const trafficGroup = L.layerGroup().addTo(map);
+let geoCache = null;
 let radarLayer = null;
 let popup = null;
 function showPopup(latlng, node) {
@@ -665,6 +674,32 @@ function renderCams() {
     m.addTo(camGroup);
   });
 }
+const TLEVEL = { 1: '順暢', 2: '車多', 3: '壅塞', 4: '嚴重壅塞', 5: '停滯' };
+async function loadGeo(stamp) {
+  if (geoCache && geoCache.updated === stamp) return geoCache;
+  const g = await fetchJSON(MONITOR_BASE + 'road_geo.json?v=' + encodeURIComponent(stamp));
+  if (!g || !Array.isArray(g.sections)) throw new Error('shape');
+  geoCache = g;
+  return g;
+}
+function renderTraffic() {
+  trafficGroup.clearLayers();
+  const t = state.cams && state.cams.traffic;
+  if (!t || !geoCache || geoCache.updated !== t.geo) return;
+  geoCache.sections.forEach((sec, i) => {
+    const lv = t.lv[i];
+    if (!lv || lv === '-') return;
+    const color = css('--t' + lv);
+    const tip = () => showPopup(sec.p[0], el('div', { class: 'pop' },
+      el('div', { class: 'pop-title', text: `${sec.k}路段` }),
+      el('dl', null, kv('壅塞程度', TLEVEL[lv] || lv), kv('平均車速', t.sp[i] == null ? '—' : t.sp[i] + ' km/h'))));
+    let layer;
+    if (sec.p.length >= 2) layer = L.polyline(sec.p, { pane: 'traffic', color, weight: 4, opacity: .9, lineCap: 'round', bubblingMouseEvents: false });
+    else layer = L.circleMarker(sec.p[0], { pane: 'traffic', radius: 3, color, fillColor: color, fillOpacity: .9, weight: 1, bubblingMouseEvents: false });
+    layer.on('click', tip);
+    layer.addTo(trafficGroup);
+  });
+}
 function renderWarn() {
   const box = $('warnbar');
   const w = state.cams && state.cams.warnings || {};
@@ -682,6 +717,14 @@ async function loadCams() {
     state.cams = j;
     const yes = j.cameras.filter((c) => c.raining === 'yes').length;
     setSource('cams', 'ok', `${j.cameras.length} 支，${yes} 支判斷有雨，更新於 ${fmtDay.format(new Date(j.updated))}`);
+    try {
+      if (j.traffic && j.traffic.geo) {
+        await loadGeo(j.traffic.geo);
+        const n = (j.traffic.lv.match(/[1-5]/g) || []).length;
+        const bad = (j.traffic.lv.match(/[4-5]/g) || []).length;
+        setSource('traffic', 'ok', `${n} 個路段有資料，${bad} 段嚴重壅塞或停滯`);
+      } else { setSource('traffic', 'error', '盯雨程式尚未產生路況資料'); }
+    } catch (e2) { setSource('traffic', 'error', describeError(e2)); }
   } catch (e) {
     setSource('cams', 'error', e.status === 404 ? '讀不到 map.json（盯雨程式尚未產生，或倉庫未公開）' : (e.message === 'shape' ? '回傳格式和預期不同' : describeError(e)));
   }
@@ -759,7 +802,7 @@ function renderStatus() {
     return el('li', { class: s.st }, el('span', { class: 'dot' }), el('span', null, `${s.label}：${label}`, s.msg ? el('span', { class: 'msg', text: s.msg }) : null));
   }));
 }
-function renderAll() { renderStations(); renderSpots(); renderCams(); renderWarn(); renderSummary(); renderLegend(); renderLists(); renderStatus(); }
+function renderAll() { renderStations(); renderSpots(); renderCams(); renderTraffic(); renderWarn(); renderSummary(); renderLegend(); renderLists(); renderStatus(); }
 
 /* ---------- refresh ---------- */
 const refreshBtn = $('refresh');
@@ -786,6 +829,7 @@ $('lyRadar').addEventListener('change', (e) => {
 });
 $('lyStations').addEventListener('change', (e) => { if (e.target.checked) stationGroup.addTo(map); else map.removeLayer(stationGroup); });
 $('lyCams').addEventListener('change', (e) => { if (e.target.checked) camGroup.addTo(map); else map.removeLayer(camGroup); });
+$('lyTraffic').addEventListener('change', (e) => { if (e.target.checked) trafficGroup.addTo(map); else map.removeLayer(trafficGroup); $('tlegend').hidden = !e.target.checked; });
 $('lyWarn').addEventListener('change', renderWarn);
 $('lySpots').addEventListener('change', (e) => { if (e.target.checked) spotGroup.addTo(map); else map.removeLayer(spotGroup); });
 document.querySelectorAll('input[name="win"]').forEach((r) => r.addEventListener('change', () => {
