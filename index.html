@@ -178,7 +178,7 @@ a { color: var(--accent); }
 .spot-icon span { display: block; width: 12px; height: 12px; background: var(--c); border: 2px solid var(--panel); box-shadow: 0 0 0 1px var(--ink-2); transform: rotate(45deg); }
 .spot-icon.dry span { background: var(--panel); }
 .cam-icon span { display: block; width: 12px; height: 12px; border-radius: 3px; background: var(--c); border: 2px solid var(--panel); box-shadow: 0 0 0 1px var(--ink-2); }
-.cam-icon.stale span { opacity: .45; }
+.cam-icon.stale span { opacity: .3; filter: grayscale(1); }
 .tlegend { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 12px; color: var(--ink-2); margin: 2px 0 0 26px; }
 .tlegend i { display: inline-block; width: 14px; height: 4px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
 .warnbar { margin: 10px 0 0; padding: 8px 10px; border-left: 3px solid var(--r4); background: color-mix(in srgb, var(--r4) 12%, var(--panel)); font-size: 13px; line-height: 1.5; }
@@ -221,7 +221,7 @@ a { color: var(--accent); }
         <h2 id="h-layers">圖層</h2>
         <label class="layer"><input type="checkbox" id="lyRadar" checked><span class="t">雷達回波</span><span class="d">RainViewer，約每 10 分鐘更新，可回看 2 小時</span></label>
         <label class="layer"><input type="checkbox" id="lyStations" checked><span class="t">雨量站實測</span><span class="d">氣象署自動雨量站，需設定 Apps Script 轉接網址</span></label>
-        <label class="layer"><input type="checkbox" id="lyCams" checked><span class="t">鏡頭判斷</span><span class="d">路邊鏡頭畫面經 AI 判斷有無下雨，方塊標記；顏色：藍＝有雨、綠＝無雨、灰＝無法判斷，淡色＝超過 3 小時前的結果</span></label>
+        <label class="layer"><input type="checkbox" id="lyCams" checked><span class="t">鏡頭判斷</span><span class="d">路邊鏡頭畫面經 AI 判斷有無下雨，方塊標記；顏色：藍＝有雨、綠＝無雨、灰＝無法判斷，灰淡＝超過 45 分鐘前的舊結果（只有雨量站有雨時鏡頭才會重新判斷）</span></label>
         <label class="layer"><input type="checkbox" id="lyTraffic" checked><span class="t">國道與市區省道路況</span><span class="d">交通部 TDX 即時車速與壅塞等級：全國國道，以及台北市、高雄市範圍的省道</span></label>
         <div class="tlegend" id="tlegend"><span><i style="background:var(--t1)"></i>順暢</span><span><i style="background:var(--t2)"></i>車多</span><span><i style="background:var(--t3)"></i>壅塞</span><span><i style="background:var(--t4)"></i>嚴重</span><span><i style="background:var(--t5)"></i>停滯</span></div>
         <label class="layer"><input type="checkbox" id="lyWarn" checked><span class="t">豪大雨特報</span><span class="d">氣象署各縣市豪雨、大雨等特報，顯示在頂端橫幅</span></label>
@@ -633,7 +633,9 @@ function renderSpots() {
 }
 /* ---------- camera judgements + warnings (map.json written by the rain-monitor job) ---------- */
 const MONITOR_BASE = 'https://raw.githubusercontent.com/bigtime0426/rain-monitor/main/';
-const STALE_MS = 3 * 3600 * 1000;
+const STALE_MS = 45 * 60 * 1000;   // 鏡頭結果超過 45 分鐘就視為過時（鏡頭只在雨量站有雨時才會重新判斷）
+const isStale = (c) => !(Date.now() - Date.parse(c.checked) < STALE_MS);
+const agoText = (ms) => { const m = Math.round(ms / 60000); return m < 60 ? m + ' 分鐘前' : (m < 2880 ? Math.round(m / 60) + ' 小時前' : Math.round(m / 1440) + ' 天前'); };
 function camColor(c) {
   if (!c.ok) return css('--dry');
   if (c.raining === 'yes') return css('--r2');
@@ -641,6 +643,7 @@ function camColor(c) {
   return css('--dry');
 }
 function camVerdict(c) {
+  if (isStale(c)) return '最後一次判斷（已過時）：' + ({ yes: '當時有雨', no: '當時沒雨', unclear: '當時無法確定' }[c.raining] || '當時無法確定');
   if (!c.ok) return '無法取得畫面或判斷';
   return { yes: '判斷：正在下雨', no: '判斷：沒有下雨', unclear: '判斷：無法確定' }[c.raining] || '判斷：無法確定';
 }
@@ -648,7 +651,7 @@ function camPopup(c) {
   const t = Date.parse(c.checked);
   const kids = [
     el('div', { class: 'pop-title', text: c.name }),
-    el('div', { class: 'pop-sub', text: `${c.area}${Number.isFinite(t) ? '　判斷於 ' + fmtDay.format(new Date(t)) : ''}` }),
+    el('div', { class: 'pop-sub', text: `${c.area}${Number.isFinite(t) ? '　判斷於 ' + fmtDay.format(new Date(t)) + '（' + agoText(Date.now() - t) + '）' : ''}` }),
     el('dl', null,
       kv('結果', camVerdict(c)),
       c.ok ? kv('信心', c.confidence == null ? '—' : Math.round(c.confidence * 100) + '%') : null,
@@ -666,12 +669,12 @@ function renderCams() {
   if (!d) return;
   const now = Date.now();
   d.cameras.forEach((c) => {
-    const stale = !(now - Date.parse(c.checked) < STALE_MS);
+    const stale = isStale(c);
     const icon = L.divIcon({
       className: 'cam-icon' + (stale ? ' stale' : ''),
       html: `<span style="--c:${camColor(c)}"></span>`, iconSize: [16, 16], iconAnchor: [8, 8]
     });
-    const m = L.marker([c.lat, c.lon], { icon, keyboard: false, title: c.name, bubblingMouseEvents: false, zIndexOffset: c.raining === 'yes' ? 500 : 0 });
+    const m = L.marker([c.lat, c.lon], { icon, keyboard: false, title: c.name, bubblingMouseEvents: false, zIndexOffset: c.raining === 'yes' && !stale ? 500 : 0 });
     m.on('click', () => showPopup([c.lat, c.lon], camPopup(c)));
     m.addTo(camGroup);
   });
@@ -717,8 +720,9 @@ async function loadCams() {
     const j = await fetchJSON(MONITOR_BASE + 'map.json?t=' + Math.floor(Date.now() / 60000));
     if (!j || !Array.isArray(j.cameras)) throw new Error('shape');
     state.cams = j;
-    const yes = j.cameras.filter((c) => c.raining === 'yes').length;
-    setSource('cams', 'ok', `${j.cameras.length} 支，${yes} 支判斷有雨，更新於 ${fmtDay.format(new Date(j.updated))}`);
+    const fresh = j.cameras.filter((c) => !isStale(c));
+    const yes = fresh.filter((c) => c.raining === 'yes').length;
+    setSource('cams', 'ok', `${j.cameras.length} 支，其中 ${fresh.length} 支為 45 分鐘內的判斷，${yes} 支判斷有雨，更新於 ${fmtDay.format(new Date(j.updated))}`);
     try {
       if (j.traffic && j.traffic.geo) {
         await loadGeo(j.traffic.geo);
