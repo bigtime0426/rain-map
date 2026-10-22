@@ -312,9 +312,9 @@ const css = (name) => getComputedStyle(document.documentElement).getPropertyValu
 const mm = (v, d = 1) => (v == null ? '—' : v.toFixed(d) + ' mm');
 const camUrl = (lat, lon) => `https://tw.live/nearby/?lat=${lat.toFixed(5)}&lon=${lon.toFixed(5)}`;
 
-async function fetchJSON(url) {
+async function fetchJSON(url, timeoutMs = 20000) {
   const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), 20000);
+  const timer = setTimeout(() => ctl.abort(), timeoutMs);
   try {
     const r = await fetch(url, { signal: ctl.signal });
     if (!r.ok) { const e = new Error('HTTP ' + r.status); e.status = r.status; throw e; }
@@ -495,13 +495,15 @@ async function loadStations() {
   if (!proxy) { state.stations = null; setSource('stations', 'idle', '尚未設定轉接網址'); return; }
   setSource('stations', 'loading');
   try {
-    const j = await fetchJSON(proxy);
+    let j;
+    try { j = await fetchJSON(proxy, 45000); }
+    catch (e1) { j = await fetchJSON(proxy, 45000); }   // Apps Script 冷啟動可能很慢，失敗時自動再試一次
     if (!j || j.ok !== true) throw Object.assign(new Error('proxy'), { proxyMsg: (j && j.error) || '轉接程式回傳格式不符' });
     state.stations = (j.stations || []).filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lon));
     if (!state.stations.length) throw Object.assign(new Error('proxy'), { proxyMsg: '轉接程式沒有回傳任何測站' });
     const t = state.stations.map((s) => Date.parse(s.time)).filter(Number.isFinite);
     const latest = t.length ? fmtClock.format(new Date(Math.max(...t))) : '';
-    setSource('stations', 'ok', `${state.stations.length} 站${latest ? '，觀測時間 ' + latest : ''}`);
+    setSource('stations', 'ok', `${state.stations.length} 站${latest ? '，觀測時間 ' + latest : ''}${j.stale ? '（氣象署暫時連不上，顯示較舊資料）' : ''}`);
   } catch (e) {
     state.stations = null;
     setSource('stations', 'error', e.proxyMsg ? '轉接程式回報：' + e.proxyMsg : describeError(e));
